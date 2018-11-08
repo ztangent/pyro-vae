@@ -41,8 +41,9 @@ class MVAE(nn.Module):
                   
     """
     def __init__(self, z_dim, z_prior_loc, z_prior_scale,
-                 modalities={}, use_cuda=False):
+                 modalities={}, use_cuda=False, name="mvae"):
         super(MVAE, self).__init__()
+        self.name = name
         self.z_dim = z_dim
         self.z_prior_loc = z_prior_loc
         self.z_prior_scale = z_prior_scale
@@ -97,7 +98,7 @@ class MVAE(nn.Module):
     
     def model(self, inputs={}, batch_size=0, annealing_beta=1.0):
         # Register this pytorch module and all of its sub-modules with pyro
-        pyro.module("mvae", self)
+        pyro.module(self.name, self)
                 
         with pyro.iarange("data", batch_size):
             # Initialize the universal prior
@@ -130,7 +131,7 @@ class MVAE(nn.Module):
     
     def guide(self, inputs={}, batch_size=0, annealing_beta=1.0):
         # Register this pytorch module and all of its sub-modules with pyro
-        pyro.module("mvae", self)
+        pyro.module(self.name, self)
         
         with pyro.iarange("data", batch_size):
             # Initialize the universal prior

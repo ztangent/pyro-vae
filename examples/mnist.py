@@ -94,10 +94,20 @@ class TextDecoder(nn.Module):
         h = self.swish(self.fc3(h))
         return self.fc4(h)
 
-def mnistVAE(z_dim, lambda_image=1.0, lambda_text=1.0):
-    model = MVAE(z_dim, z_prior_loc=0.0, z_prior_scale=1.0)
-    model.add_modality('image', 784, dist.Bernoulli,
-                       ImageEncoder(z_dim), ImageDecoder(z_dim), lambda_image)
-    model.add_modality('text', 10, dist.OneHotCategorical,
-                       TextEncoder(z_dim), TextDecoder(z_dim), lambda_text)
-    
+class MnistMVAE(MVAE):
+
+    def __init__(self, z_dim, z_prior_loc=0.0, z_prior_scale=1.0,
+                 lambda_image=1.0, lambda_text=1.0, use_cuda=False):
+        super(MnistMVAE, self).__init__(z_dim,
+                                        z_prior_loc=z_prior_loc,
+                                        z_prior_scale=z_prior_scale,
+                                        name="mnist_mvae")
+        self.add_modality('image', 784, dist.Bernoulli,
+                          ImageEncoder(z_dim), ImageDecoder(z_dim),
+                          lambda_image)
+        self.add_modality('text', 10, dist.OneHotCategorical,
+                          TextEncoder(z_dim), TextDecoder(z_dim),
+                          lambda_text)
+        if use_cuda:
+            self.use_cuda = True
+            self.cuda()
