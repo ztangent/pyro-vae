@@ -40,7 +40,7 @@ class MVAE(nn.Module):
                   size of the tensor representing the latent random variable z
                   
     """
-    def __init__(self, z_dim, z_prior_loc, z_prior_scale,
+    def __init__(self, z_dim, z_prior_loc=0.0, z_prior_scale=1.0,
                  modalities={}, use_cuda=False, name="mvae"):
         super(MVAE, self).__init__()
         self.name = name
