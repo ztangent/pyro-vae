@@ -15,21 +15,7 @@ import pyro
 import pyro.distributions as dist
 import pyro.poutine as poutine
 
-class ProductOfExperts(nn.Module):
-    """
-    Return parameters for product of independent Gaussian experts.
-    See https://arxiv.org/pdf/1410.7827.pdf for equations.
-
-    @param loc: M x D for M experts
-    @param scale: M x D for M experts
-    """
-    def forward(self, loc, scale, eps=1e-8):
-        scale = scale + eps # numerical constant for stability
-        # precision of i-th Gaussian expert (T = 1/sigma^2)
-        T = 1. / scale
-        product_loc = torch.sum(loc * T, dim=0) / torch.sum(T, dim=0)
-        product_scale = 1. / torch.sum(T, dim=0)
-        return product_loc, product_scale
+from utils import ProductOfExperts
 
 class MVAE(nn.Module):
     """
@@ -102,8 +88,8 @@ class MVAE(nn.Module):
                 
         with pyro.iarange("data", batch_size):
             # Initialize the universal prior
-            z_loc = z_prior_loc * torch.zeros(1, batch_size, self.z_dim)
-            z_scale = z_prior_scale * torch.ones(1, batch_size, self.z_dim)
+            z_loc = z_prior_loc * torch.ones(batch_size, self.z_dim)
+            z_scale = z_prior_scale * torch.ones(batch_size, self.z_dim)
             if self.use_cuda:
                 z_loc, z_scale = z_loc.cuda(), z_scale.cuda()
             
@@ -123,8 +109,7 @@ class MVAE(nn.Module):
                     continue
                 m_obs = "obs_" + m
                 with poutine.scale(scale=self.loss_mults[m]):
-                    pyro.sample(m_obs, m_dist,
-                                obs=inputs[m].reshape(-1, self.dims[m]))
+                    pyro.sample(m_obs, m_dist, obs=inputs[m])
                                 
         # Return the output distributions for visualization, etc.
         return outputs
@@ -135,7 +120,7 @@ class MVAE(nn.Module):
         
         with pyro.iarange("data", batch_size):
             # Initialize the universal prior
-            z_loc = z_prior_loc * torch.zeros(1, batch_size, self.z_dim)
+            z_loc = z_prior_loc * torch.ones(1, batch_size, self.z_dim)
             z_scale = z_prior_scale * torch.ones(1, batch_size, self.z_dim)
             if self.use_cuda:
                 z_loc, z_scale = z_loc.cuda(), z_scale.cuda()
