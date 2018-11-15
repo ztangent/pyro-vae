@@ -13,6 +13,7 @@ import torch.nn.functional as F
 import torch.utils.data
 from torchvision import datasets, transforms
 
+import pyro
 import pyro.distributions as dist
 from pyro.infer import SVI, Trace_ELBO
 from pyro.optim import Adam
@@ -44,7 +45,7 @@ class ImageEncoder(nn.Module):
     def forward(self, x):
         h = self.swish(self.fc1(x.view(-1, 784)))
         h = self.swish(self.fc2(h))
-        return self.fc31(h), self.fc32(h)
+        return self.fc31(h), torch.exp(self.fc32(h))
 
 class ImageDecoder(nn.Module):
     """Parametrizes p(x|z).
@@ -63,7 +64,7 @@ class ImageDecoder(nn.Module):
         h = self.swish(self.fc1(z))
         h = self.swish(self.fc2(h))
         h = self.swish(self.fc3(h))
-        return self.fc4(h)  # NOTE: no sigmoid here. See train.py
+        return F.sigmoid(self.fc4(h))
 
 class TextEncoder(nn.Module):
     """Parametrizes q(z|y).
@@ -81,7 +82,7 @@ class TextEncoder(nn.Module):
     def forward(self, x):
         h = self.swish(self.fc1(x))
         h = self.swish(self.fc2(h))
-        return self.fc31(h), self.fc32(h)
+        return self.fc31(h), torch.exp(self.fc32(h))
 
 
 class TextDecoder(nn.Module):
@@ -101,7 +102,7 @@ class TextDecoder(nn.Module):
         h = self.swish(self.fc1(z))
         h = self.swish(self.fc2(h))
         h = self.swish(self.fc3(h))
-        return self.fc4(h)
+        return F.softmax(self.fc4(h), dim=1)
 
 class MnistMVAE(MVAE):
     """MVAE for MNIST data.
@@ -160,7 +161,10 @@ if __name__ == "__main__":
         datasets.MNIST('./mnist_data', train=False, download=True,
                        transform=transforms.ToTensor()),
         batch_size=args.batch_size, shuffle=True)
-
+    # Creat path to save models
+    if not os.path.exists('./mnist_models'):
+        os.makedirs('./mnist_models')
+    
     # Construct multimodal VAE
     mvae = MnistMVAE(z_dim=args.z_dim, use_cuda=args.cuda,
                      lambda_image=args.l_image, lambda_text=args.l_text)
@@ -194,12 +198,18 @@ if __name__ == "__main__":
             text_loss += svi.step(inputs={'text': text},
                                   batch_size=train_loader.batch_size,
                                   annealing_beta=annealing_beta)
-            print(batch_num, joint_loss, image_loss, text_loss)
+            if batch_num % 100 != 0:
+                continue
+            # Print average loss at regular intervals
+            print('Batch: {:5d} Loss: {:10.1f} Image: {:10.1f} Text:{:10.1f}'.\
+                  format(batch_num, joint_loss/(batch_num+1),
+                         image_loss/(batch_num+1), text_loss/(batch_num+1)))
         # Average losses and print
         joint_loss /= len(train_loader)
         image_loss /= len(train_loader)
         text_loss /= len(train_loader)
-        print('Epoch: {}\tLoss: {:.4f}\tImage: {:.4f}\tText:{:.4f}'.\
+        print('---')
+        print('Epoch: {}\tLoss: {:10.1f} Image: {:10.1f} Text:{:10.1f}'.\
               format(epoch, joint_loss, image_loss, text_loss))
         return joint_loss, image_loss, text_loss
 
@@ -224,16 +234,17 @@ if __name__ == "__main__":
             text_loss += svi.step(inputs={'text': text},
                                   batch_size=test_loader.batch_size)
         # Average losses and print
-        joint_loss /= len(train_loader)
-        image_loss /= len(train_loader)
-        text_loss /= len(train_loader)
-        print('Test\tLoss: {:.4f}\tImage: {:.4f}\tText:{:.4f}'.\
+        joint_loss /= len(test_loader)
+        image_loss /= len(test_loader)
+        text_loss /= len(test_loader)
+        print('Test:\t\tLoss: {:10.1f} Image: {:10.1f} Text:{:10.1f}'.\
               format(joint_loss, image_loss, text_loss))
         return joint_loss, image_loss, text_loss
 
     # Train and save best model
     best_loss = sys.maxint
     for epoch in range(1, args.epochs + 1):
+        print('---')
         train(epoch)
         joint_loss, image_loss, text_loss = evaluate()
         total_loss = joint_loss + image_loss + text_loss

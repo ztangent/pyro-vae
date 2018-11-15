@@ -114,7 +114,7 @@ class MVAE(nn.Module):
                 m_obs = "obs_" + m
                 with poutine.scale(scale=self.loss_mults[m]):
                     pyro.sample(m_obs, m_dist, obs=inputs[m])
-                                
+        
         # Return the output distributions for visualization, etc.
         return outputs
     
