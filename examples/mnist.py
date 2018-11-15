@@ -16,7 +16,7 @@ from torchvision import datasets, transforms
 import pyro
 import pyro.distributions as dist
 from pyro.infer import SVI, Trace_ELBO
-from pyro.optim import Adam
+from pyro.optim import Adam, ClippedAdam
 
 import sys, os
 parent_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -166,11 +166,12 @@ if __name__ == "__main__":
         os.makedirs('./mnist_models')
     
     # Construct multimodal VAE
+    pyro.clear_param_store()
     mvae = MnistMVAE(z_dim=args.z_dim, use_cuda=args.cuda,
                      lambda_image=args.l_image, lambda_text=args.l_text)
 
     # Setup optimizer and inference algorithm
-    optimizer = Adam({'lr': args.lr})
+    optimizer = ClippedAdam({'lr': args.lr})
     svi = SVI(mvae.model, mvae.guide, optimizer, loss=Trace_ELBO())
 
     # Training loop

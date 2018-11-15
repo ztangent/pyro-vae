@@ -66,7 +66,7 @@ class MVAE(nn.Module):
 
     def infer(self, inputs={}, batch_size=1):
         # Initialize the universal prior
-        z_loc = self.z_prior_loc * torch.zeros(1, batch_size, self.z_dim)
+        z_loc = self.z_prior_loc * torch.ones(1, batch_size, self.z_dim)
         z_scale = self.z_prior_scale * torch.ones(1, batch_size, self.z_dim)
         if self.use_cuda:
             z_loc, z_scale = z_loc.cuda(), z_scale.cuda()
