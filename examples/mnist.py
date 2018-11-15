@@ -9,10 +9,17 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import torch.utils.data
+from torchvision import datasets, transforms
 
 import pyro.distributions as dist
 from pyro.infer import SVI, Trace_ELBO
 from pyro.optim import Adam
+
+import sys, os
+parent_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(1, parent_dir)
 
 from mvae import MVAE
 
@@ -65,7 +72,7 @@ class TextEncoder(nn.Module):
     """
     def __init__(self, n_latents):
         super(TextEncoder, self).__init__()
-        self.fc1   = nn.Embedding(10, 512)
+        self.fc1   = nn.Linear(10, 512)
         self.fc2   = nn.Linear(512, 512)
         self.fc31  = nn.Linear(512, n_latents)
         self.fc32  = nn.Linear(512, n_latents)
@@ -160,7 +167,7 @@ if __name__ == "__main__":
 
     # Setup optimizer and inference algorithm
     optimizer = Adam({'lr': args.lr})
-    svi = SVI(mvae.model, mvae.guide, optimizer, loss=TraceELBO())
+    svi = SVI(mvae.model, mvae.guide, optimizer, loss=Trace_ELBO())
 
     # Training loop
     def train(epoch):
@@ -169,6 +176,11 @@ if __name__ == "__main__":
         # Accumulate loss for each modality and joint loss
         joint_loss, image_loss, text_loss = 0.0, 0.0, 0.0
         for batch_num, (image, text) in enumerate(train_loader):
+            # Flatten images
+            image = image.view(-1, 784)
+            # Convert labels to one-hot
+            text = text.view(-1, 1)
+            text = torch.zeros(text.shape[0], 10).scatter_(1, text, 1)
             if args.cuda:
                 image, text = image.cuda(), text.cuda()
             # Minimize ELBO term for complete example
@@ -182,6 +194,7 @@ if __name__ == "__main__":
             text_loss += svi.step(inputs={'text': text},
                                   batch_size=train_loader.batch_size,
                                   annealing_beta=annealing_beta)
+            print(batch_num, joint_loss, image_loss, text_loss)
         # Average losses and print
         joint_loss /= len(train_loader)
         image_loss /= len(train_loader)
@@ -195,6 +208,11 @@ if __name__ == "__main__":
         # Accumulate loss for each modality and joint loss
         joint_loss, image_loss, text_loss = 0.0, 0.0, 0.0
         for batch_num, (image, text) in enumerate(test_loader):
+            # Flatten images
+            image = image.view(-1, 784)
+            # Convert labels to one-hot
+            text = text.view(-1, 1)
+            text = torch.zeros(text.shape[0], 10).scatter_(1, text, 1)
             if args.cuda:
                 image, text = image.cuda(), text.cuda()
             # Compute ELBO term for complete example

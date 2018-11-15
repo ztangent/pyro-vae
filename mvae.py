@@ -24,7 +24,6 @@ class MVAE(nn.Module):
 
     @param z_dim: integer
                   size of the tensor representing the latent random variable z
-                  
     """
     def __init__(self, z_dim, z_prior_loc=0.0, z_prior_scale=1.0,
                  modalities={}, use_cuda=False, name="mvae"):
@@ -37,8 +36,8 @@ class MVAE(nn.Module):
         self.modalities = []
         self.dims = dict()
         self.dists = dict()
-        self.encoders = nn.ModuleDict()
-        self.decoders = nn.ModuleDict()
+        self.encoders = dict() # nn.ModuleDict not available in torch 0.4.0
+        self.decoders = dict()
         self.loss_mults = dict()
         for name, params in modalities.iteritems():
             self.add_modality(name, *params)
@@ -51,22 +50,24 @@ class MVAE(nn.Module):
         self.dims[name] = dims
         self.dists[name] = dist
         self.encoders[name] = encoder
+        self.add_module("{}_enc".format(name), encoder)
         self.decoders[name] = decoder
+        self.add_module("{}_dec".format(name), decoder)
         self.loss_mults[name] = loss_mult
         if self.use_cuda:
             encoder.cuda()
             decoder.cuda()
             
-    def forward(self, inputs, batch_size=1):
-        z_loc, z_scale  = self.infer(inputs)
+    def forward(self, inputs={}, batch_size=1):
+        z_loc, z_scale  = self.infer(inputs, batch_size)
         z = pyro.sample("latent", dist.Normal(z_loc, z_scale).independent(1))
         outputs = {m: self.decoders[m].forward(z) for m in self.modalities}
         return outputs
 
     def infer(self, inputs={}, batch_size=1):
         # Initialize the universal prior
-        z_loc = z_prior_loc * torch.zeros(1, batch_size, self.z_dim)
-        z_scale = z_prior_scale * torch.ones(1, batch_size, self.z_dim)
+        z_loc = self.z_prior_loc * torch.zeros(1, batch_size, self.z_dim)
+        z_scale = self.z_prior_scale * torch.ones(1, batch_size, self.z_dim)
         if self.use_cuda:
             z_loc, z_scale = z_loc.cuda(), z_scale.cuda()
 
@@ -88,8 +89,8 @@ class MVAE(nn.Module):
                 
         with pyro.iarange("data", batch_size):
             # Initialize the universal prior
-            z_loc = z_prior_loc * torch.ones(batch_size, self.z_dim)
-            z_scale = z_prior_scale * torch.ones(batch_size, self.z_dim)
+            z_loc = self.z_prior_loc * torch.ones(batch_size, self.z_dim)
+            z_scale = self.z_prior_scale * torch.ones(batch_size, self.z_dim)
             if self.use_cuda:
                 z_loc, z_scale = z_loc.cuda(), z_scale.cuda()
             
@@ -102,11 +103,14 @@ class MVAE(nn.Module):
             for m in self.modalities:
                 # Decode the latent code z for each modality
                 m_dist_params = self.decoders[m].forward(z)
-                m_dist = self.dists[m](*m_dist_params).independent(1)
                 outputs[m] = m_dist_params
                 # Score against observed inputs if given
                 if m not in inputs:
                     continue
+                if type(m_dist_params) is tuple:
+                    m_dist = self.dists[m](*m_dist_params).independent(1)
+                else:
+                    m_dist = self.dists[m](m_dist_params).independent(1)
                 m_obs = "obs_" + m
                 with poutine.scale(scale=self.loss_mults[m]):
                     pyro.sample(m_obs, m_dist, obs=inputs[m])
@@ -120,8 +124,9 @@ class MVAE(nn.Module):
         
         with pyro.iarange("data", batch_size):
             # Initialize the universal prior
-            z_loc = z_prior_loc * torch.ones(1, batch_size, self.z_dim)
-            z_scale = z_prior_scale * torch.ones(1, batch_size, self.z_dim)
+            z_loc = self.z_prior_loc * torch.ones(batch_size, self.z_dim)
+            z_scale = self.z_prior_scale * torch.ones(batch_size, self.z_dim)
+            z_loc, z_scale = z_loc.unsqueeze(0), z_scale.unsqueeze(0)
             if self.use_cuda:
                 z_loc, z_scale = z_loc.cuda(), z_scale.cuda()
 
