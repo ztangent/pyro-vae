@@ -129,7 +129,7 @@ class MnistMVAE(MVAE):
 def image_transform(x):
     """Flatten and normalize image to [0, 1]."""
     x = transforms.functional.to_tensor(x).view(784)
-    x = x / 255.0
+    x = ((x / 255.0) > 0.5).float()
     return x
 
 def text_transform(y):
@@ -180,6 +180,7 @@ if __name__ == "__main__":
     
     # Construct multimodal VAE
     pyro.clear_param_store()
+    pyro.enable_validation() # Check for NaN errors, etc.
     mvae = MnistMVAE(z_dim=args.z_dim, use_cuda=args.cuda,
                      lambda_image=args.l_image, lambda_text=args.l_text)
 
