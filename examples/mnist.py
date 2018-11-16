@@ -126,6 +126,17 @@ class MnistMVAE(MVAE):
             self.use_cuda = True
             self.cuda()
 
+def image_transform(x):
+    """Flatten and normalize image to [0, 1]."""
+    x = transforms.functional.to_tensor(x).view(784)
+    x = x / 255.0
+    return x
+
+def text_transform(y):
+    """Convert labels to one-hot vector."""
+    y = torch.zeros(10).scatter_(0, y, 1.0)
+    return y
+            
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
@@ -155,13 +166,15 @@ if __name__ == "__main__":
     # Create loaders for MNIST (auto-downloads if necessary)
     train_loader = torch.utils.data.DataLoader(
         datasets.MNIST('./mnist_data', train=True, download=True,
-                       transform=transforms.ToTensor()),
-        batch_size=args.batch_size, shuffle=True)
+                       transform=image_transform,
+                       target_transform=text_transform),
+    batch_size=args.batch_size, shuffle=True)
     test_loader = torch.utils.data.DataLoader(
         datasets.MNIST('./mnist_data', train=False, download=True,
-                       transform=transforms.ToTensor()),
+                       transform=image_transform,
+                       target_transform=text_transform),
         batch_size=args.batch_size, shuffle=True)
-    # Creat path to save models
+    # Create path to save models
     if not os.path.exists('./mnist_models'):
         os.makedirs('./mnist_models')
     
@@ -171,7 +184,7 @@ if __name__ == "__main__":
                      lambda_image=args.l_image, lambda_text=args.l_text)
 
     # Setup optimizer and inference algorithm
-    optimizer = ClippedAdam({'lr': args.lr})
+    optimizer = Adam({'lr': args.lr})
     svi = SVI(mvae.model, mvae.guide, optimizer, loss=Trace_ELBO())
 
     # Training loop
@@ -181,11 +194,6 @@ if __name__ == "__main__":
         # Accumulate loss for each modality and joint loss
         joint_loss, image_loss, text_loss = 0.0, 0.0, 0.0
         for batch_num, (image, text) in enumerate(train_loader):
-            # Flatten images
-            image = image.view(-1, 784)
-            # Convert labels to one-hot
-            text = text.view(-1, 1)
-            text = torch.zeros(text.shape[0], 10).scatter_(1, text, 1)
             if args.cuda:
                 image, text = image.cuda(), text.cuda()
             # Minimize ELBO term for complete example
@@ -199,7 +207,7 @@ if __name__ == "__main__":
             text_loss += svi.step(inputs={'text': text},
                                   batch_size=train_loader.batch_size,
                                   annealing_beta=annealing_beta)
-            if batch_num % 100 != 0:
+            if batch_num % 50 != 0:
                 continue
             # Print average loss at regular intervals
             print('Batch: {:5d} Loss: {:10.1f} Image: {:10.1f} Text:{:10.1f}'.\
@@ -219,20 +227,18 @@ if __name__ == "__main__":
         # Accumulate loss for each modality and joint loss
         joint_loss, image_loss, text_loss = 0.0, 0.0, 0.0
         for batch_num, (image, text) in enumerate(test_loader):
-            # Flatten images
-            image = image.view(-1, 784)
-            # Convert labels to one-hot
-            text = text.view(-1, 1)
-            text = torch.zeros(text.shape[0], 10).scatter_(1, text, 1)
             if args.cuda:
                 image, text = image.cuda(), text.cuda()
             # Compute ELBO term for complete example
-            joint_loss += svi.step(inputs={'image': image, 'text': text},
-                                   batch_size=test_loader.batch_size)
+            joint_loss += \
+                svi.evaluate_loss(inputs={'image': image, 'text': text},
+                                  batch_size=test_loader.batch_size)
             # Compute ELBO term for each modality
-            image_loss += svi.step(inputs={'image': image},
-                                   batch_size=test_loader.batch_size)
-            text_loss += svi.step(inputs={'text': text},
+            image_loss += \
+                svi.evaluate_loss(inputs={'image': image},
+                                  batch_size=test_loader.batch_size)
+            text_loss += \
+                svi.evaluate_loss(inputs={'text': text},
                                   batch_size=test_loader.batch_size)
         # Average losses and print
         joint_loss /= len(test_loader)
