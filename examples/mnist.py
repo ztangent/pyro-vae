@@ -64,7 +64,7 @@ class ImageDecoder(nn.Module):
         h = self.swish(self.fc1(z))
         h = self.swish(self.fc2(h))
         h = self.swish(self.fc3(h))
-        return F.sigmoid(self.fc4(h))
+        return F.logsigmoid(self.fc4(h))
 
 class TextEncoder(nn.Module):
     """Parametrizes q(z|y).
@@ -102,7 +102,7 @@ class TextDecoder(nn.Module):
         h = self.swish(self.fc1(z))
         h = self.swish(self.fc2(h))
         h = self.swish(self.fc3(h))
-        return F.softmax(self.fc4(h), dim=1)
+        return F.log_softmax(self.fc4(h), dim=1)
 
 class MnistMVAE(MVAE):
     """MVAE for MNIST data.
@@ -118,10 +118,10 @@ class MnistMVAE(MVAE):
                                         name="mnist_mvae")
         self.add_modality('image', 784, dist.Bernoulli,
                           ImageEncoder(z_dim), ImageDecoder(z_dim),
-                          lambda_image)
+                          lambda_image, use_logits=True)
         self.add_modality('text', 10, dist.OneHotCategorical,
                           TextEncoder(z_dim), TextDecoder(z_dim),
-                          lambda_text)
+                          lambda_text, use_logits=True)
         if use_cuda:
             self.use_cuda = True
             self.cuda()

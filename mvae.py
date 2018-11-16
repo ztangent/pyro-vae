@@ -39,13 +39,15 @@ class MVAE(nn.Module):
         self.encoders = dict() # nn.ModuleDict not available in torch 0.4.0
         self.decoders = dict()
         self.loss_mults = dict()
+        self.use_logits = dict()
         for name, params in modalities.iteritems():
             self.add_modality(name, *params)
         self.use_cuda = use_cuda
         if self.use_cuda:
             self.cuda()
 
-    def add_modality(self, name, dims, dist, encoder, decoder, loss_mult=1.0):
+    def add_modality(self, name, dims, dist, encoder, decoder,
+                     loss_mult=1.0, use_logits=False):
         self.modalities.append(name)
         self.dims[name] = dims
         self.dists[name] = dist
@@ -54,6 +56,7 @@ class MVAE(nn.Module):
         self.decoders[name] = decoder
         self.add_module("{}_dec".format(name), decoder)
         self.loss_mults[name] = loss_mult
+        self.use_logits[name] = use_logits
         if self.use_cuda:
             encoder.cuda()
             decoder.cuda()
@@ -108,8 +111,13 @@ class MVAE(nn.Module):
                 if m not in inputs:
                     continue
                 if type(m_dist_params) is tuple:
+                    # Unpack parameters if there are multiple
                     m_dist = self.dists[m](*m_dist_params).independent(1)
+                elif self.use_logits[m]:
+                    # Use logits for numerical stability
+                    m_dist = self.dists[m](logits=m_dist_params).independent(1)
                 else:
+                    # Assume only one parameter
                     m_dist = self.dists[m](m_dist_params).independent(1)
                 m_obs = "obs_" + m
                 with poutine.scale(scale=self.loss_mults[m]):
