@@ -5,6 +5,7 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import absolute_import
 
+import random as r
 import numpy as np
 
 import torch
@@ -12,6 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
 from torchvision import datasets, transforms
+from torchvision.utils import save_image
 
 import pyro
 import pyro.distributions as dist
@@ -124,18 +126,61 @@ class MnistMVAE(MVAE):
                           lambda_text, use_logits=True)
         if use_cuda:
             self.use_cuda = True
-            self.cuda()
+            self.cuda()        
 
 def image_transform(x):
     """Flatten and normalize image to [0, 1]."""
     x = transforms.functional.to_tensor(x).view(784)
-    x = ((x / 255.0) > 0.5).float()
+    x = (x > 0.5).float()
     return x
 
 def text_transform(y):
     """Convert labels to one-hot vector."""
     y = torch.zeros(10).scatter_(0, y, 1.0)
     return y
+
+def load_sample(loader, target=None):
+    # Load random batch
+    idx = r.randint(0, len(loader)-1)
+    for batch_num, data in enumerate(loader):
+        if batch_num == idx:
+            images, texts = data
+            break
+    # Convert texts from one-hot back to integers
+    texts = texts.nonzero()[:,1]
+    # Filter samples with the target label
+    if target:
+        images = images[texts == target]
+        texts = texts[texts == target]
+    # Randomly sample an image and label
+    idx = r.randint(0, images.shape[0]-1)
+    image, text = torch.tensor(images[idx,:]), torch.tensor(texts[idx])
+    # Convert label back to one-hot
+    text = torch.zeros(10).scatter_(0, text, 1.0)
+    return image, text
+
+def gen_sample(mvae, loader, args):
+    if args.target and (args.target < 0 or args.target > 9):
+        print("Target label must be from 0--9.")
+        return
+    inputs = {}
+    if args.condition:
+        # Condition upon observed image or target
+        image, text = load_sample(loader, args.target)
+        if args.cuda:
+            image, text = image.cuda(), text.cuda()
+        if args.condition in ['image', 'both']:
+            save_image(image.view(1, 28, 28), "original.png")
+            inputs['image'] = image.unsqueeze(0)
+        if args.condition in ['text', 'both']:
+            inputs['text'] = text.unsqueeze(0)
+    # Generate image and text
+    outputs, params = mvae.forward(inputs)    
+    # Save generated image, output text
+    image = torch.exp(params['image'].squeeze(0))
+    save_image(image.view(1, 28, 28), "generated.png")
+    text = outputs['text'].squeeze(0).nonzero()
+    print("Generated label: {}".format(int(text)))
 
 def train(epoch, svi, loader, args):
     """Training loop."""
@@ -223,9 +268,15 @@ if __name__ == "__main__":
                         help='enables CUDA training')
     parser.add_argument('--test', action='store_true', default=False,
                         help='evaluate without training')
-    parser.add_argument('--test_model', type=str,
+    parser.add_argument('--sample', action='store_true', default=False,
+                        help='sample from trained model')
+    parser.add_argument('--condition', type=str, default=None,
+                        help='sample conditoned on [image/text/both/none]')
+    parser.add_argument('--target', type=int, default=None,
+                        help="target label to condition on (default: random)")
+    parser.add_argument('--model', type=str,
                         default="./mnist_models/best.save",
-                        help='path to model to evaluate')
+                        help='path to trained model')
     args = parser.parse_args()
     args.cuda = args.cuda and torch.cuda.is_available()
 
@@ -253,10 +304,18 @@ if __name__ == "__main__":
     optimizer = Adam({'lr': args.lr})
     svi = SVI(mvae.model, mvae.guide, optimizer, loss=Trace_ELBO())
 
-    # Evaluate model if test flag is set
-    if args.test:
-        pyro.get_param_store().load(args.test_model)
+    # Load trained model to test or sample
+    if args.test or args.sample:
+        pyro.get_param_store().load(args.model)
         pyro.module(mvae.name, mvae, update_module_params=True)
+    
+    # Sample from model if flag is set
+    if args.sample:
+        gen_sample(mvae, test_loader, args)
+        sys.exit(0)
+    
+    # Evaluate model if test flag is set
+    if args.test or args.sample:
         evaluate(svi, test_loader, args)
         sys.exit(0)
     

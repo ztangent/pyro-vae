@@ -62,10 +62,26 @@ class MVAE(nn.Module):
             decoder.cuda()
             
     def forward(self, inputs={}, batch_size=1):
+        # Sample z conditioned on the inputs
         z_loc, z_scale  = self.infer(inputs, batch_size)
         z = pyro.sample("latent", dist.Normal(z_loc, z_scale).independent(1))
-        outputs = {m: self.decoders[m].forward(z) for m in self.modalities}
-        return outputs
+        # Decode z and reconstruct each of the modalities
+        outputs, params = {}, {}
+        with pyro.iarange("data", batch_size):
+            for m in self.modalities:
+                params[m] = self.decoders[m].forward(z)
+                if type(params[m]) is tuple:
+                    # Unpack parameters if there are multiple
+                    m_dist = self.dists[m](*params[m]).independent(1)
+                elif self.use_logits[m]:
+                    # Use logits for numerical stability
+                    m_dist = self.dists[m](logits=params[m]).independent(1)
+                else:
+                    # Assume only one parameter
+                    m_dist = self.dists[m](params[m]).independent(1)
+                m_obs = "obs_" + m
+                outputs[m] = pyro.sample(m_obs, m_dist)
+        return outputs, params
 
     def infer(self, inputs={}, batch_size=1):
         # Initialize the universal prior
@@ -74,16 +90,18 @@ class MVAE(nn.Module):
         if self.use_cuda:
             z_loc, z_scale = z_loc.cuda(), z_scale.cuda()
 
-        # Compute posteriors for each modality present in inputs
-        for m in self.modalities:
-            if m not in inputs or inputs[m] is None:
-                continue
-            z_loc_m, z_scale_m = self.encoders[m].forward(inputs[m])
-            z_loc = torch.cat((z_loc, z_loc_m.unsqueeze(0)), dim=0)
-            z_scale = torch.cat((z_scale, z_scale_m.unsqueeze(0)), dim=0)
+        with pyro.iarange("data", batch_size):
+            # Compute posteriors for each modality present in inputs
+            for m in self.modalities:
+                if m not in inputs or inputs[m] is None:
+                    continue
+                z_loc_m, z_scale_m = self.encoders[m].forward(inputs[m])
+                z_loc = torch.cat((z_loc, z_loc_m.unsqueeze(0)), dim=0)
+                z_scale = torch.cat((z_scale, z_scale_m.unsqueeze(0)), dim=0)
+                
+            # Product of experts to combine Gaussians
+            z_loc, z_scale = self.experts(z_loc, z_scale)
             
-        # Product of experts to combine Gaussians
-        z_loc, z_scale = self.experts(z_loc, z_scale)
         return z_loc, z_scale
     
     def model(self, inputs={}, batch_size=0, annealing_beta=1.0):
@@ -102,11 +120,9 @@ class MVAE(nn.Module):
             with poutine.scale(scale=annealing_beta):
                 z = pyro.sample("latent", z_dist)
 
-            outputs = {}
             for m in self.modalities:
                 # Decode the latent code z for each modality
                 m_dist_params = self.decoders[m].forward(z)
-                outputs[m] = m_dist_params
                 # Score against observed inputs if given
                 if m not in inputs:
                     continue
@@ -122,10 +138,7 @@ class MVAE(nn.Module):
                 m_obs = "obs_" + m
                 with poutine.scale(scale=self.loss_mults[m]):
                     pyro.sample(m_obs, m_dist, obs=inputs[m])
-        
-        # Return the output distributions for visualization, etc.
-        return outputs
-    
+            
     def guide(self, inputs={}, batch_size=0, annealing_beta=1.0):
         # Register this pytorch module and all of its sub-modules with pyro
         pyro.module(self.name, self)
