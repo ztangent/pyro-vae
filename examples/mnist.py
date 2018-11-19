@@ -24,7 +24,7 @@ import sys, os
 parent_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(1, parent_dir)
 
-from mvae import MVAE
+from mvae import MVAE, MVAE_ELBO
 
 class Swish(nn.Module):
     """ReLu replacement: https://arxiv.org/abs/1710.05941"""
@@ -186,62 +186,44 @@ def train(epoch, svi, loader, args):
     """Training loop."""
     # Anneal beta linearly from 0 to 1 over anneal_len
     annealing_beta = min(epoch / args.anneal_len, 1.0)
-    # Accumulate loss for each modality and joint loss
-    joint_loss, image_loss, text_loss = 0.0, 0.0, 0.0
+    # Accumulate loss and number of examples
+    loss, data_num = 0.0, 0
     for batch_num, (image, text) in enumerate(loader):
+        batch_size = image.shape[0]
         if args.cuda:
             image, text = image.cuda(), text.cuda()
-        # Minimize ELBO term for complete example
-        joint_loss += svi.step(inputs={'image': image, 'text': text},
-                               batch_size=loader.batch_size,
-                               annealing_beta=annealing_beta)
-        # Minimize ELBO term for each modality
-        image_loss += svi.step(inputs={'image': image},
-                               batch_size=loader.batch_size,
-                               annealing_beta=annealing_beta)
-        text_loss += svi.step(inputs={'text': text},
-                              batch_size=loader.batch_size,
-                              annealing_beta=annealing_beta)
+        # Minimize ELBO terms
+        loss += svi.step(inputs={'image': image, 'text': text},
+                         batch_size=batch_size,
+                         annealing_beta=annealing_beta)
+        data_num += batch_size
         if batch_num % 50 != 0:
             continue
         # Print average loss at regular intervals
-        print('Batch: {:5d} Loss: {:10.1f} Image: {:10.1f} Text:{:10.1f}'.\
-              format(batch_num, joint_loss/(batch_num+1),
-                     image_loss/(batch_num+1), text_loss/(batch_num+1)))
+        print('Batch: {:5d}\tLoss: {:10.1f}'.\
+              format(batch_num, loss/data_num))
     # Average losses and print
-    joint_loss /= len(loader)
-    image_loss /= len(loader)
-    text_loss /= len(loader)
+    loss /= data_num
     print('---')
-    print('Epoch: {}\tLoss: {:10.1f} Image: {:10.1f} Text:{:10.1f}'.\
-          format(epoch, joint_loss, image_loss, text_loss))
-    return joint_loss, image_loss, text_loss
+    print('Epoch: {}\tLoss: {:10.1f}'.format(epoch, loss))
+    return loss
 
 # Evaluation over test set
 def evaluate(svi, loader, args):
-    # Accumulate loss for each modality and joint loss
-    joint_loss, image_loss, text_loss = 0.0, 0.0, 0.0
+    # Accumulate loss and number of examples
+    loss, data_num = 0.0, 0
     for batch_num, (image, text) in enumerate(loader):
+        batch_size = image.shape[0]
         if args.cuda:
             image, text = image.cuda(), text.cuda()
-        # Compute ELBO term for complete example
-        joint_loss += \
-            svi.evaluate_loss(inputs={'image': image, 'text': text},
-                              batch_size=loader.batch_size)
-        # Compute ELBO term for each modality
-        image_loss += \
-            svi.evaluate_loss(inputs={'image': image},
-                              batch_size=loader.batch_size)
-        text_loss += \
-            svi.evaluate_loss(inputs={'text': text},
-                              batch_size=loader.batch_size)
+        # Evaluate loss
+        loss += svi.evaluate_loss(inputs={'image': image, 'text': text},
+                                  batch_size=batch_size)
+        data_num += batch_size
     # Average losses and print
-    joint_loss /= len(loader)
-    image_loss /= len(loader)
-    text_loss /= len(loader)
-    print('Test:\t\tLoss: {:10.1f} Image: {:10.1f} Text:{:10.1f}'.\
-          format(joint_loss, image_loss, text_loss))
-    return joint_loss, image_loss, text_loss
+    loss /= data_num
+    print('Evaluation\tLoss: {:10.1f}'.format(loss))
+    return loss
 
 if __name__ == "__main__":
     import argparse
@@ -302,7 +284,7 @@ if __name__ == "__main__":
     
     # Setup optimizer and inference algorithm
     optimizer = Adam({'lr': args.lr})
-    svi = SVI(mvae.model, mvae.guide, optimizer, loss=Trace_ELBO())
+    svi = SVI(mvae.model, mvae.guide, optimizer, loss=MVAE_ELBO())
 
     # Load trained model to test or sample
     if args.test or args.sample:
@@ -311,7 +293,7 @@ if __name__ == "__main__":
     
     # Sample from model if flag is set
     if args.sample:
-        gen_sample(mvae, test_loader, args)
+        gen_sample(mvae, train_loader, args)
         sys.exit(0)
     
     # Evaluate model if test flag is set
@@ -324,11 +306,10 @@ if __name__ == "__main__":
     for epoch in range(1, args.epochs + 1):
         print('---')
         train(epoch, svi, train_loader, args)
-        joint_loss, image_loss, text_loss = evaluate(svi, test_loader, args)
-        total_loss = joint_loss + image_loss + text_loss
+        loss = evaluate(svi, test_loader, args)
 
-        if total_loss < best_loss:
-            best_loss = total_loss
+        if loss < best_loss:
+            best_loss = loss
             path = os.path.join("./mnist_models", "best.save") 
             pyro.get_param_store().save(path)
 

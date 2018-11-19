@@ -14,6 +14,7 @@ import torch.nn as nn
 import pyro
 import pyro.distributions as dist
 import pyro.poutine as poutine
+from pyro.infer import Trace_ELBO
 
 from utils import ProductOfExperts
 
@@ -166,4 +167,31 @@ class MVAE(nn.Module):
             with poutine.scale(scale=annealing_beta):
                 pyro.sample("latent",
                             dist.Normal(z_loc, z_scale).independent(1))
+    
+class MVAE_ELBO(Trace_ELBO):
+    """Wrapper for Trace_ELBO to train MVAE on multiple ELBO terms."""
+    
+    def loss(self, model, guide, *args, **kwargs):
+        loss = 0.0
+        # Compute loss for all modality
+        loss += super(MVAE_ELBO, self).loss(model, guide, *args, **kwargs)
+        # Compute loss for each modality
+        for m, m_data in kwargs['inputs'].iteritems():
+            m_kws = dict(kwargs)
+            m_kws['inputs'] = {m: m_data}
+            loss += super(MVAE_ELBO, self).loss(model, guide, *args, **m_kws)
+        return loss
+
+    def loss_and_grads(self, model, guide, *args, **kwargs):
+        loss = 0.0
+        # Compute loss for all modality
+        loss += super(MVAE_ELBO, self).\
+                loss_and_grads(model, guide, *args, **kwargs)
+        # Compute loss for each modality
+        for m, m_data in kwargs['inputs'].iteritems():
+            m_kws = dict(kwargs)
+            m_kws['inputs'] = {m: m_data}
+            loss += super(MVAE_ELBO, self).\
+                    loss_and_grads(model, guide, *args, **m_kws)
+        return loss
     
