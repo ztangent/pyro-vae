@@ -136,7 +136,68 @@ def text_transform(y):
     """Convert labels to one-hot vector."""
     y = torch.zeros(10).scatter_(0, y, 1.0)
     return y
-            
+
+def train(epoch, svi, loader, args):
+    """Training loop."""
+    # Anneal beta linearly from 0 to 1 over anneal_len
+    annealing_beta = min(epoch / args.anneal_len, 1.0)
+    # Accumulate loss for each modality and joint loss
+    joint_loss, image_loss, text_loss = 0.0, 0.0, 0.0
+    for batch_num, (image, text) in enumerate(loader):
+        if args.cuda:
+            image, text = image.cuda(), text.cuda()
+        # Minimize ELBO term for complete example
+        joint_loss += svi.step(inputs={'image': image, 'text': text},
+                               batch_size=loader.batch_size,
+                               annealing_beta=annealing_beta)
+        # Minimize ELBO term for each modality
+        image_loss += svi.step(inputs={'image': image},
+                               batch_size=loader.batch_size,
+                               annealing_beta=annealing_beta)
+        text_loss += svi.step(inputs={'text': text},
+                              batch_size=loader.batch_size,
+                              annealing_beta=annealing_beta)
+        if batch_num % 50 != 0:
+            continue
+        # Print average loss at regular intervals
+        print('Batch: {:5d} Loss: {:10.1f} Image: {:10.1f} Text:{:10.1f}'.\
+              format(batch_num, joint_loss/(batch_num+1),
+                     image_loss/(batch_num+1), text_loss/(batch_num+1)))
+    # Average losses and print
+    joint_loss /= len(loader)
+    image_loss /= len(loader)
+    text_loss /= len(loader)
+    print('---')
+    print('Epoch: {}\tLoss: {:10.1f} Image: {:10.1f} Text:{:10.1f}'.\
+          format(epoch, joint_loss, image_loss, text_loss))
+    return joint_loss, image_loss, text_loss
+
+# Evaluation over test set
+def evaluate(svi, loader, args):
+    # Accumulate loss for each modality and joint loss
+    joint_loss, image_loss, text_loss = 0.0, 0.0, 0.0
+    for batch_num, (image, text) in enumerate(loader):
+        if args.cuda:
+            image, text = image.cuda(), text.cuda()
+        # Compute ELBO term for complete example
+        joint_loss += \
+            svi.evaluate_loss(inputs={'image': image, 'text': text},
+                              batch_size=loader.batch_size)
+        # Compute ELBO term for each modality
+        image_loss += \
+            svi.evaluate_loss(inputs={'image': image},
+                              batch_size=loader.batch_size)
+        text_loss += \
+            svi.evaluate_loss(inputs={'text': text},
+                              batch_size=loader.batch_size)
+    # Average losses and print
+    joint_loss /= len(loader)
+    image_loss /= len(loader)
+    text_loss /= len(loader)
+    print('Test:\t\tLoss: {:10.1f} Image: {:10.1f} Text:{:10.1f}'.\
+          format(joint_loss, image_loss, text_loss))
+    return joint_loss, image_loss, text_loss
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
@@ -160,6 +221,11 @@ if __name__ == "__main__":
                         help='how many epochs to wait before saving')
     parser.add_argument('--cuda', action='store_true', default=False,
                         help='enables CUDA training')
+    parser.add_argument('--test', action='store_true', default=False,
+                        help='evaluate without training')
+    parser.add_argument('--test_model', type=str,
+                        default="./mnist_models/best.save",
+                        help='path to model to evaluate')
     args = parser.parse_args()
     args.cuda = args.cuda and torch.cuda.is_available()
 
@@ -180,81 +246,26 @@ if __name__ == "__main__":
     
     # Construct multimodal VAE
     pyro.clear_param_store()
-    pyro.enable_validation() # Check for NaN errors, etc.
     mvae = MnistMVAE(z_dim=args.z_dim, use_cuda=args.cuda,
                      lambda_image=args.l_image, lambda_text=args.l_text)
-
+    
     # Setup optimizer and inference algorithm
     optimizer = Adam({'lr': args.lr})
     svi = SVI(mvae.model, mvae.guide, optimizer, loss=Trace_ELBO())
 
-    # Training loop
-    def train(epoch):
-        # Anneal beta linearly from 0 to 1 over anneal_len
-        annealing_beta = min(epoch / args.anneal_len, 1.0)
-        # Accumulate loss for each modality and joint loss
-        joint_loss, image_loss, text_loss = 0.0, 0.0, 0.0
-        for batch_num, (image, text) in enumerate(train_loader):
-            if args.cuda:
-                image, text = image.cuda(), text.cuda()
-            # Minimize ELBO term for complete example
-            joint_loss += svi.step(inputs={'image': image, 'text': text},
-                                   batch_size=train_loader.batch_size,
-                                   annealing_beta=annealing_beta)
-            # Minimize ELBO term for each modality
-            image_loss += svi.step(inputs={'image': image},
-                                   batch_size=train_loader.batch_size,
-                                   annealing_beta=annealing_beta)
-            text_loss += svi.step(inputs={'text': text},
-                                  batch_size=train_loader.batch_size,
-                                  annealing_beta=annealing_beta)
-            if batch_num % 50 != 0:
-                continue
-            # Print average loss at regular intervals
-            print('Batch: {:5d} Loss: {:10.1f} Image: {:10.1f} Text:{:10.1f}'.\
-                  format(batch_num, joint_loss/(batch_num+1),
-                         image_loss/(batch_num+1), text_loss/(batch_num+1)))
-        # Average losses and print
-        joint_loss /= len(train_loader)
-        image_loss /= len(train_loader)
-        text_loss /= len(train_loader)
-        print('---')
-        print('Epoch: {}\tLoss: {:10.1f} Image: {:10.1f} Text:{:10.1f}'.\
-              format(epoch, joint_loss, image_loss, text_loss))
-        return joint_loss, image_loss, text_loss
-
-    # Evaluation over test set
-    def evaluate():
-        # Accumulate loss for each modality and joint loss
-        joint_loss, image_loss, text_loss = 0.0, 0.0, 0.0
-        for batch_num, (image, text) in enumerate(test_loader):
-            if args.cuda:
-                image, text = image.cuda(), text.cuda()
-            # Compute ELBO term for complete example
-            joint_loss += \
-                svi.evaluate_loss(inputs={'image': image, 'text': text},
-                                  batch_size=test_loader.batch_size)
-            # Compute ELBO term for each modality
-            image_loss += \
-                svi.evaluate_loss(inputs={'image': image},
-                                  batch_size=test_loader.batch_size)
-            text_loss += \
-                svi.evaluate_loss(inputs={'text': text},
-                                  batch_size=test_loader.batch_size)
-        # Average losses and print
-        joint_loss /= len(test_loader)
-        image_loss /= len(test_loader)
-        text_loss /= len(test_loader)
-        print('Test:\t\tLoss: {:10.1f} Image: {:10.1f} Text:{:10.1f}'.\
-              format(joint_loss, image_loss, text_loss))
-        return joint_loss, image_loss, text_loss
-
-    # Train and save best model
+    # Evaluate model if test flag is set
+    if args.test:
+        pyro.get_param_store().load(args.test_model)
+        pyro.module(mvae.name, mvae, update_module_params=True)
+        evaluate(svi, test_loader, args)
+        sys.exit(0)
+    
+    # Otherwise train and save best model
     best_loss = sys.maxint
     for epoch in range(1, args.epochs + 1):
         print('---')
-        train(epoch)
-        joint_loss, image_loss, text_loss = evaluate()
+        train(epoch, svi, train_loader, args)
+        joint_loss, image_loss, text_loss = evaluate(svi, test_loader, args)
         total_loss = joint_loss + image_loss + text_loss
 
         if total_loss < best_loss:
