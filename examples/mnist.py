@@ -141,7 +141,6 @@ def text_transform(y):
 
 def load_sample(loader, target=None, n_samples=1):
     # Collate data from loader
-    print("Loading data to reconstruct...")
     image, text = torch.zeros([0, 784]), torch.zeros([0, 10])
     i_samples = 0
     for batch_num, (i, t) in enumerate(loader):
@@ -175,7 +174,6 @@ def gen_sample(mvae, loader, n_samples, args):
         if args.condition in ['text', 'both']:
             inputs['text'] = text
     # Generate image and text
-    print("Generating samples...")
     outputs, params = mvae.forward(inputs, batch_size=n_samples)
     # Save generated image
     image = torch.exp(params['image'])
@@ -213,9 +211,9 @@ def train(epoch, svi, loader, args):
     return loss
 
 # Evaluation over test set
-def evaluate(svi, loader, args):
+def evaluate(mvae, svi, loader, args):
     # Accumulate loss and number of examples
-    loss, data_num = 0.0, 0
+    loss, data_num, correct = 0.0, 0, 0
     for batch_num, (image, text) in enumerate(loader):
         batch_size = image.shape[0]
         if args.cuda:
@@ -223,11 +221,16 @@ def evaluate(svi, loader, args):
         # Evaluate loss
         loss += svi.evaluate_loss(inputs={'image': image, 'text': text},
                                   batch_size=batch_size)
+        # Compute labelling accuracy
+        outputs, params = mvae.forward(inputs={'image': image},
+                                       batch_size=batch_size)
+        correct += (params['text'].argmax(dim=1) == text.nonzero()[:,1]).sum()
         data_num += batch_size
-    # Average losses and print
+    # Compute and print average loss and label accuracy
     loss /= data_num
-    print('Evaluation\tLoss: {:10.1f}'.format(loss))
-    return loss
+    accuracy = float(correct) / data_num
+    print('Evaluation\tLoss: {:10.1f}\tAccuracy: {}'.format(loss, accuracy))
+    return loss, accuracy
 
 if __name__ == "__main__":
     import argparse
@@ -302,7 +305,7 @@ if __name__ == "__main__":
     
     # Evaluate model if test flag is set
     if args.test or args.sample:
-        evaluate(svi, test_loader, args)
+        evaluate(mvae, svi, test_loader, args)
         sys.exit(0)
     
     # Otherwise train and save best model
@@ -310,7 +313,7 @@ if __name__ == "__main__":
     for epoch in range(1, args.epochs + 1):
         print('---')
         train(epoch, svi, train_loader, args)
-        loss = evaluate(svi, test_loader, args)
+        loss, accuracy = evaluate(mvae, svi, test_loader, args)
 
         if loss < best_loss:
             best_loss = loss
