@@ -62,10 +62,14 @@ class MVAE(nn.Module):
             encoder.cuda()
             decoder.cuda()
             
-    def forward(self, inputs={}, batch_size=1):
+    def forward(self, inputs={}, batch_size=1, sample_z=True):
         # Sample z conditioned on the inputs
         z_loc, z_scale  = self.infer(inputs, batch_size)
-        z = pyro.sample("latent", dist.Normal(z_loc, z_scale).independent(1))
+        if sample_z:
+            z_dist = dist.Normal(z_loc, z_scale).independent(1)
+            z = pyro.sample("latent", z_dist)
+        else:
+            z = z_loc
         # Decode z and reconstruct each of the modalities
         outputs, params = {}, {}
         with pyro.iarange("data", batch_size):
