@@ -125,7 +125,8 @@ class MVAE(nn.Module):
             with poutine.scale(scale=annealing_beta):
                 z = pyro.sample("latent", z_dist)
 
-            for m in self.modalities:
+            for i in pyro.irange('modalities', len(self.modalities)):
+                m = self.modalities[i]
                 # Decode the latent code z for each modality
                 m_dist_params = self.decoders[m].forward(z)
                 # Score against observed inputs if given
@@ -177,7 +178,7 @@ class MVAE_ELBO(Trace_ELBO):
     
     def loss(self, model, guide, *args, **kwargs):
         loss = 0.0
-        # Compute loss for all modality
+        # Compute loss for all modalities
         loss += super(MVAE_ELBO, self).loss(model, guide, *args, **kwargs)
         # Compute loss for each modality
         for m, m_data in kwargs['inputs'].iteritems():
@@ -188,7 +189,7 @@ class MVAE_ELBO(Trace_ELBO):
 
     def loss_and_grads(self, model, guide, *args, **kwargs):
         loss = 0.0
-        # Compute loss for all modality
+        # Compute loss for all modalities
         loss += super(MVAE_ELBO, self).\
                 loss_and_grads(model, guide, *args, **kwargs)
         # Compute loss for each modality

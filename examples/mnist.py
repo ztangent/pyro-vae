@@ -186,18 +186,20 @@ def gen_sample(mvae, loader, n_samples, args):
 
 def train(epoch, svi, loader, args):
     """Training loop."""
-    # Anneal beta linearly from 0 to 1 over anneal_len
-    annealing_beta = min(epoch / args.anneal_len, 1.0)
     # Accumulate loss and number of examples
     loss, data_num = 0.0, 0
     for batch_num, (image, text) in enumerate(loader):
         batch_size = image.shape[0]
+        # Anneal beta linearly from 0 to 1 over anneal_len epochs
+        beta = ((batch_num + epoch * len(loader)) /
+                (args.anneal_len * len(loader)))
+        beta = min(beta, 1.0)
         if args.cuda:
             image, text = image.cuda(), text.cuda()
         # Minimize ELBO terms
         loss += svi.step(inputs={'image': image, 'text': text},
                          batch_size=batch_size,
-                         annealing_beta=annealing_beta)
+                         annealing_beta=beta)
         data_num += batch_size
         if batch_num % 50 != 0:
             continue
