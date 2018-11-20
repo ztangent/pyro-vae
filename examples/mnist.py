@@ -139,48 +139,52 @@ def text_transform(y):
     y = torch.zeros(10).scatter_(0, y, 1.0)
     return y
 
-def load_sample(loader, target=None):
-    # Load random batch
-    idx = r.randint(0, len(loader)-1)
-    for batch_num, data in enumerate(loader):
-        if batch_num == idx:
-            images, texts = data
+def load_sample(loader, target=None, n_samples=1):
+    # Collate data from loader
+    print("Loading data to reconstruct...")
+    image, text = torch.zeros([0, 784]), torch.zeros([0, 10])
+    i_samples = 0
+    for batch_num, (i, t) in enumerate(loader):
+        # Convert texts from one-hot back to integers
+        labels = t.nonzero()[:,1]
+        # Filter samples with the target label
+        if target is not None:
+            i = i[labels == target]
+            t = t[labels == target]
+        # Collate samples
+        image = torch.cat((image, i[0:n_samples-i_samples,:]), dim=0)
+        text = torch.cat((text, t[0:n_samples-i_samples,:]), dim=0)
+        i_samples = image.shape[0]
+        if i_samples == n_samples:
             break
-    # Convert texts from one-hot back to integers
-    texts = texts.nonzero()[:,1]
-    # Filter samples with the target label
-    if target:
-        images = images[texts == target]
-        texts = texts[texts == target]
-    # Randomly sample an image and label
-    idx = r.randint(0, images.shape[0]-1)
-    image, text = torch.tensor(images[idx,:]), torch.tensor(texts[idx])
-    # Convert label back to one-hot
-    text = torch.zeros(10).scatter_(0, text, 1.0)
     return image, text
 
-def gen_sample(mvae, loader, args):
+def gen_sample(mvae, loader, n_samples, args):
     if args.target and (args.target < 0 or args.target > 9):
         print("Target label must be from 0--9.")
         return
     inputs = {}
     if args.condition:
-        # Condition upon observed image or target
-        image, text = load_sample(loader, args.target)
+        # Condition upon observed images or targets
+        image, text = load_sample(loader, args.target, n_samples)
         if args.cuda:
             image, text = image.cuda(), text.cuda()
         if args.condition in ['image', 'both']:
-            save_image(image.view(1, 28, 28), "original.png")
-            inputs['image'] = image.unsqueeze(0)
+            save_image(image.view(n_samples, 1, 28, 28), "original.png")
+            inputs['image'] = image
         if args.condition in ['text', 'both']:
-            inputs['text'] = text.unsqueeze(0)
+            inputs['text'] = text
     # Generate image and text
-    outputs, params = mvae.forward(inputs)    
-    # Save generated image, output text
-    image = torch.exp(params['image'].squeeze(0))
-    save_image(image.view(1, 28, 28), "generated.png")
-    text = outputs['text'].squeeze(0).nonzero()
-    print("Generated label: {}".format(int(text)))
+    print("Generating samples...")
+    outputs, params = mvae.forward(inputs, batch_size=n_samples)
+    # Save generated image
+    image = torch.exp(params['image'])
+    save_image(image.view(n_samples, 1, 28, 28), "generated.png")
+    # Save generated text labels
+    text = params['text'].argmax(dim=1)
+    with open('./labels.txt', 'w') as fp:
+        for t in text:
+            fp.write('{}\n'.format(int(t)))
 
 def train(epoch, svi, loader, args):
     """Training loop."""
@@ -250,8 +254,8 @@ if __name__ == "__main__":
                         help='enables CUDA training')
     parser.add_argument('--test', action='store_true', default=False,
                         help='evaluate without training')
-    parser.add_argument('--sample', action='store_true', default=False,
-                        help='sample from trained model')
+    parser.add_argument('--sample', type=int, default=0, metavar='N',
+                        help='sample from trained model (default: no samples)')
     parser.add_argument('--condition', type=str, default=None,
                         help='sample conditoned on [image/text/both/none]')
     parser.add_argument('--target', type=int, default=None,
@@ -267,7 +271,7 @@ if __name__ == "__main__":
         datasets.MNIST('./mnist_data', train=True, download=True,
                        transform=image_transform,
                        target_transform=text_transform),
-    batch_size=args.batch_size, shuffle=True)
+        batch_size=args.batch_size, shuffle=True)
     test_loader = torch.utils.data.DataLoader(
         datasets.MNIST('./mnist_data', train=False, download=True,
                        transform=image_transform,
@@ -292,8 +296,8 @@ if __name__ == "__main__":
         pyro.module(mvae.name, mvae, update_module_params=True)
     
     # Sample from model if flag is set
-    if args.sample:
-        gen_sample(mvae, train_loader, args)
+    if args.sample > 0:
+        gen_sample(mvae, train_loader, args.sample, args)
         sys.exit(0)
     
     # Evaluate model if test flag is set
